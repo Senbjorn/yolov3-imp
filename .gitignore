@@ -1,0 +1,8 @@
+articles/
+
+*.names
+*.cfg
+*.weights
+
+.ipynb_checkpoints/
+*.pyc
