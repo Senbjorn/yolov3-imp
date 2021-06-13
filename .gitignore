@@ -6,3 +6,7 @@ articles/
 
 .ipynb_checkpoints/
 *.pyc
+
+.env
+
+.vscode/
