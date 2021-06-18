@@ -38,7 +38,7 @@ def predict_transform(prediction, input_dim, anchors, num_classes, CUDA=True):
     return prediction
 
 
-def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
+def write_results(prediction, confidence, num_classes, nms_conf=0.4):
     box_corner = torch.zeros_like(prediction[:, :, :4])
     box_corner[:, :, 0] = (prediction[:, :, 0] - prediction[:, :, 2]/2)
     box_corner[:, :, 1] = (prediction[:, :, 1] - prediction[:, :, 3]/2)

@@ -1,6 +1,7 @@
 
 import torch
 from bbox import bbox_area, bbox_iou
+import numpy as np
 
 
 def get_area_range_indices(bboxes, area_range):
@@ -24,12 +25,12 @@ def bbox_match(preds, targets, ious, iou_threshold=0.5, n_preds=None, area_range
     ious - array[array[float]], [n_preds * n_targets]
     area_range - (min, max)
     '''
-    confidences, indices = torch.sort(preds[:, 4], descending=True)
-
+    indices = np.argsort(-preds[:, 4].detach().cpu().numpy(), kind='mergesort')
+    indices = torch.from_numpy(indices)
     indices = indices[:n_preds]
-
+    confidences = preds[indices, 4]
+    # confidences, indices = torch.sort(preds[:, 4], descending=True)
     target_indices = get_area_range_indices(targets, area_range)
-    print(target_indices)
 
     targets_matched = {}
     preds_matched = {}
@@ -62,6 +63,8 @@ def bbox_match(preds, targets, ious, iou_threshold=0.5, n_preds=None, area_range
     unmached_filter = (result['match'] != -1)
     unmached_filter[unmached_indices] = True
     result = {k: v[unmached_filter] for k, v in result.items()}
+    
+    result['num_targets'] = target_indices.size(0)
     return result
 
 
@@ -71,11 +74,12 @@ def compute_interpolated_precision(precision, recall, recall_thresholds):
     recall - array[], [n]
     recall_thresholds - array[], [n_thr]
     '''
+    interpolated_precision = torch.zeros_like(recall_thresholds)
     n = precision.size(0)
-    max_precision = precision[::-1].cummax(0).values[::-1]
+    max_precision = precision.flip(0).cummax(0).values.flip(0)
     inds = torch.searchsorted(recall, recall_thresholds, right=False)
     inds = inds[inds < n]
-    interpolated_precision = max_precision[inds]
+    interpolated_precision[:inds.size(0)] = max_precision[inds]
     return interpolated_precision
 
 
@@ -118,7 +122,7 @@ def bbox_metrics(preds, targets, iou_threshold=0.5, n_preds=None, area_range=Non
     '''
     ious = bbox_iou(preds[:, :4], targets[:, :4])
     match = bbox_match(
-        preds[:5], targets[:, :4], ious,
+        preds[:, :5], targets[:, :4], ious,
         iou_threshold=iou_threshold,
         n_preds=n_preds,
         area_range=area_range
