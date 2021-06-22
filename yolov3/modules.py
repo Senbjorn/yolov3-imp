@@ -1,8 +1,39 @@
 import torch
 from torch import nn
-from config import ConfigParser
 import numpy as np
-from utils import predict_transform
+
+from yolov3.config import ConfigParser
+
+
+def transform_output(model_output, input_dim, anchors, num_classes):
+    device = model_output.device
+    batch_size = model_output.size(0)
+    stride = input_dim // model_output.size(2)
+    grid_size = input_dim // stride
+    bbox_attrs = 5 + num_classes
+    num_anchors = len(anchors)
+
+    model_output = model_output.view(batch_size, bbox_attrs * num_anchors, grid_size * grid_size)
+    model_output = model_output.transpose(1, 2).contiguous()
+    model_output = model_output.view(batch_size, grid_size * grid_size * num_anchors, bbox_attrs)
+    anchors = [(a[0] / stride, a[1] / stride) for a in anchors]
+    model_output[:, :, 0] = torch.sigmoid(model_output[:, :, 0])
+    model_output[:, :, 1] = torch.sigmoid(model_output[:, :, 1])
+    model_output[:, :, 4] = torch.sigmoid(model_output[:, :, 4])
+    model_output[:, :, 5: 5 + num_classes] = torch.sigmoid((model_output[:,:, 5 : 5 + num_classes]))
+
+    grid = np.arange(grid_size)
+    a,b = np.meshgrid(grid, grid)
+    x_offset = torch.tensor(a, device=device, dtype=torch.float32).view(-1,1)
+    y_offset = torch.tensor(b, device=device, dtype=torch.float32).view(-1,1)
+    x_y_offset = torch.cat((x_offset, y_offset), 1).repeat(1,num_anchors).view(-1,2).unsqueeze(0)
+    model_output[:, :, :2] += x_y_offset
+
+    anchors = torch.tensor(anchors, device=device, dtype=torch.float32)
+    anchors = anchors.repeat(grid_size * grid_size, 1).unsqueeze(0)
+    model_output[:, :, 2:4] = torch.exp(model_output[:,:,2:4]) * anchors
+    model_output[:, :, :4] *= stride
+    return model_output
 
 
 class EmptyLayer(nn.Module):
@@ -92,7 +123,7 @@ class Darknet(nn.Module):
         self.blocks = parser.parse(cfg_path)
         self.net_info, self.module_list = create_modules(self.blocks)
     
-    def forward(self, x, CUDA):
+    def forward(self, x):
         modules = self.blocks[1:]
         outputs = {}
         detections = None
@@ -120,7 +151,7 @@ class Darknet(nn.Module):
                 input_dim = self.net_info["height"]
                 num_classes = module["classes"]
                 x = x.detach()
-                x = predict_transform(x, input_dim, anchors, num_classes, CUDA)
+                x = transform_output(x, input_dim, anchors, num_classes)
                 if detections is None:
                     detections = x
                 else:
