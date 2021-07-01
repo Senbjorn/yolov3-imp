@@ -3,8 +3,8 @@ import shutil
 import torch
 from collections import defaultdict
 
-from yolov3.data import save_index
-from yolov3.utils import json_load, print_verbose
+from yolov3.data import read_index, save_index
+from yolov3.utils import json_dump, json_load, print_verbose
 
 
 def load_classes(names_path):
@@ -24,7 +24,7 @@ def compute_name_id_mappings(images):
     return name_id, id_name
 
 
-def compute_coco_detections(preds, image_id):
+def compute_coco_detections(preds, image_id, with_id=False):
     result = []
     preds = preds.cpu().detach().numpy()
     for pred in preds:
@@ -34,16 +34,36 @@ def compute_coco_detections(preds, image_id):
         height = pred[3] - y
         bbox = [x, y, width, height]
         bbox = list(map(lambda x: round(float(x), 2), bbox))
-        category_id = int(pred[6]) + 1
         score = float(pred[4])
+        category_id = int(pred[5]) + 1
         coco_pred = {
             'image_id': image_id,
             'category_id': category_id,
             'bbox': bbox,
             'score': score
         }
+        if with_id:
+            pred_id = int(pred[6])
+            coco_pred['id'] = pred_id
         result.append(coco_pred)
     return result
+
+
+def convert_detections_to_coco(input_path, output_path, category_id_mapping=None):
+    result = []
+    index_path = os.path.join(input_path, 'index.json')
+    index = read_index(index_path)
+    for image_id, pred_file in index.items():
+        pred_path = os.path.join(input_path, pred_file)
+        pred = torch.load(pred_path)
+        coco_pred = compute_coco_detections(pred, image_id, with_id=True)
+        result.extend(coco_pred)
+    result = sorted(result, key=lambda x: x['id'])
+    for r in result:
+        if category_id_mapping is not None:
+            r['category_id'] = category_id_mapping[r['category_id']]
+        r.pop('id')
+    json_dump(result, output_path)
 
 
 def map_ids(coco_dt, id_mapping):
