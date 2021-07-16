@@ -19,6 +19,7 @@ def list_float_parser(value):
 
 PARSERS={
     'default_key': int,
+    'load_skip': int,
     'activation': str,
     'policy': str,
     'jitter': float,

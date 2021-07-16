@@ -229,3 +229,126 @@ class Darknet(nn.Module):
 
                     conv_weights = conv_weights.view_as(conv.weight)
                     conv.weight.copy_(conv_weights)
+
+
+class DarknetB(nn.Module):
+    def __init__(self, cfg_path):
+        super(DarknetB, self).__init__()
+        parser = ConfigParser()
+        self.blocks = parser.parse(cfg_path)
+        self.net_info, self.module_list = create_modules(self.blocks)
+    
+    def forward(self, x):
+        modules = self.blocks[1:]
+        yolo_outputs = []
+        outputs = {}
+        for i, module in enumerate(modules):
+            module_type = modules[i]['type']
+            if module_type == 'convolutional' or module_type == 'upsample':
+                x = self.module_list[i](x)
+            elif module_type == 'route':
+                layers = module['layers']
+                if layers[0] > 0:
+                    layers[0] = layers[0] - i
+                if len(layers) == 1:
+                    x = outputs[i + layers[0]]
+                else:
+                    if layers[1] > 0:
+                        layers[1] = layers[1] - i
+                    m1 = outputs[i + layers[0]]
+                    m2 = outputs[i + layers[1]]
+                    x = torch.cat((m1, m2), 1)
+            elif module_type == 'shortcut':
+                from_ = module["from"]
+                x = outputs[i-1] + outputs[i+from_]
+            elif module_type == 'yolo':
+                anchors = self.module_list[i][0].anchors
+                input_dim = self.net_info["height"]
+                num_classes = module["classes"]
+                yolo_outputs.append(
+                    {
+                        'anchors': anchors,
+                        'num_classes': num_classes,
+                        'input_dim': input_dim,
+                        'output': x
+                    }
+                )
+            outputs[i] = x
+        return yolo_outputs
+
+
+    def load_weights(self, weights_path):
+        with open(weights_path, 'rb') as weights_file:
+            header = np.fromfile(weights_file, dtype = np.int32, count = 5)
+            self.header = torch.from_numpy(header)
+            self.seen = self.header[3]
+            weights = np.fromfile(weights_file, dtype = np.float32)
+        ptr = 0
+        with torch.no_grad():
+            for i in range(len(self.module_list)):
+                block = self.blocks[i + 1]
+                module_type = block['type']
+                load_skip = 'load_skip' in block and block['load_skip']
+                if module_type == 'convolutional':
+                    model = self.module_list[i]
+                    conv = model[0]
+                    if 'batch_normalize' in block:
+                        batch_normalize = block['batch_normalize']
+                    else:
+                        batch_normalize = 0
+                    if batch_normalize == 1:
+                        bn = model[1]
+
+                        #Get the number of weights of Batch Norm Layer
+                        num_bn_biases = bn.bias.numel()
+
+                        #Load the weights
+                        bn_biases = torch.from_numpy(weights[ptr:ptr + num_bn_biases])
+                        ptr += num_bn_biases
+
+                        bn_weights = torch.from_numpy(weights[ptr: ptr + num_bn_biases])
+                        ptr  += num_bn_biases
+
+                        bn_running_mean = torch.from_numpy(weights[ptr: ptr + num_bn_biases])
+                        ptr  += num_bn_biases
+
+                        bn_running_var = torch.from_numpy(weights[ptr: ptr + num_bn_biases])
+                        ptr  += num_bn_biases
+
+                        if not load_skip:
+                            #Cast the loaded weights into dims of model weights. 
+                            bn_biases = bn_biases.view_as(bn.bias)
+                            bn_weights = bn_weights.view_as(bn.weight)
+                            bn_running_mean = bn_running_mean.view_as(bn.running_mean)
+                            bn_running_var = bn_running_var.view_as(bn.running_var)
+
+                            #Copy the data to model
+                            
+                            bn.bias.copy_(bn_biases)
+                            bn.weight.copy_(bn_weights)
+                            bn.running_mean.copy_(bn_running_mean)
+                            bn.running_var.copy_(bn_running_var)
+                    else:
+                        #Number of biases
+                        num_biases = conv.bias.numel()
+
+                        #Load the weights
+                        conv_biases = torch.from_numpy(weights[ptr: ptr + num_biases])
+                        ptr = ptr + num_biases
+
+                        if not load_skip:
+                            #reshape the loaded weights according to the dims of the model weights
+                            conv_biases = conv_biases.view_as(conv.bias)
+
+                            #Finally copy the data
+                            conv.bias.copy_(conv_biases)
+                    
+                    num_weights = conv.weight.numel()
+
+                    #Do the same as above for weights
+                    conv_weights = torch.from_numpy(weights[ptr:ptr+num_weights])
+                    ptr = ptr + num_weights
+
+                    if not load_skip:
+                        conv_weights = conv_weights.view_as(conv.weight)
+                        conv.weight.copy_(conv_weights)
